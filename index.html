@@ -99,7 +99,7 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
   }
   #status-line.offline .dot { background: var(--warn); }
 
-  .hidden { display: none; }
+  .hidden { display: none !important; }
   .offline-banner {
     background: #FBF3E4;
     color: #7A5B1E;
@@ -553,6 +553,39 @@ function missingRequiredFields(parsed) {
   return REPORT_FIELDS.filter(f => f.required && !String(parsed[f.key] || "").trim());
 }
 
+// Manual retry, triggered by tapping "Retry Now" on one specific entry.
+// Deliberately does NOT gate on navigator.onLine like the background queue
+// does -- that flag is known to misreport (stuck "false" right after
+// reconnecting, or just wrong on some phones/networks), and if the
+// original failure happened while it was misreporting, a gated retry
+// would silently do nothing at all when tapped. This always actually
+// attempts the fetch and lets the real result -- success or a real
+// network error -- speak for itself.
+async function retryEntry(id, btn) {
+  const entries = loadEntries();
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+
+  const originalLabel = btn ? btn.textContent : null;
+  if (btn) { btn.textContent = "Retrying…"; btn.disabled = true; }
+
+  try {
+    const result = await parseEntry(entry);
+    entry.parsed = result.values;
+    entry.flags = result.flags || [];
+    if (result.date && /^\d{4}-\d{2}-\d{2}$/.test(result.date)) {
+      entry.date = result.date;
+    }
+    entry.status = missingRequiredFields(entry.parsed).length ? "needs_info" : "done";
+    entry.lastError = null;
+  } catch (e) {
+    entry.status = "error";
+    entry.lastError = e.message;
+  }
+  saveEntries(entries);
+  renderLists(); // rebuilds this button too, so no need to restore it manually on success
+}
+
 async function processPendingQueue() {
   if (!navigator.onLine) return;
   const entries = loadEntries();
@@ -759,7 +792,7 @@ function renderLists() {
     `);
   });
   pendingEl.querySelectorAll('[data-action="retry"]').forEach(btn => {
-    btn.addEventListener("click", () => processPendingQueue());
+    btn.addEventListener("click", () => retryEntry(btn.dataset.id, btn));
   });
   wireDeleteHandlers(pendingEl);
 
