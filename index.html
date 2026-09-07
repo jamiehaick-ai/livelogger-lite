@@ -122,7 +122,7 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
 
   label {
     display: block;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
     color: var(--navy);
     margin-bottom: 6px;
@@ -132,33 +132,82 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 12px;
-    font-size: 16px;
+    font-size: 17px;
     font-family: inherit;
     background: var(--paper);
     color: var(--ink);
   }
-  textarea { min-height: 140px; resize: vertical; line-height: 1.4; }
+  textarea { min-height: 220px; resize: vertical; line-height: 1.45; }
+  #rawText { min-height: 260px; font-size: 18px; }
   .field-block { margin-bottom: 14px; }
-  .field-hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .field-hint { font-size: 14px; color: var(--muted); margin-top: 4px; }
 
   .mic-note {
-    display: flex; align-items: flex-start; gap: 8px;
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
     background: #FBF3E4;
     border: 1px solid #EAD9B5;
     border-radius: 8px;
     padding: 10px 12px;
-    font-size: 13px;
+    font-size: 15px;
     color: #7A5B1E;
     margin-bottom: 14px;
+    line-height: 1.4;
+  }
+  .mic-note-close {
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    color: #7A5B1E;
+    font-size: 18px;
+    font-weight: 700;
+    padding: 0 0 0 8px;
+    line-height: 1;
+  }
+  .mic-note-reopen {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #FBF3E4;
+    border: 1px solid #EAD9B5;
+    color: #7A5B1E;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 12px;
+    border-radius: 999px;
+    margin-bottom: 14px;
+    width: auto;
+  }
+
+  .name-chip {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 14px;
+  }
+  .name-chip-text {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .name-edit-btn {
+    flex-shrink: 0;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--paper);
+    border: 1px solid var(--border);
+    color: var(--navy);
+    font-size: 18px;
+    font-weight: 700;
+    padding: 0;
+    line-height: 1;
+    display: flex; align-items: center; justify-content: center;
   }
 
   button {
     font-family: inherit;
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 700;
     border: none;
     border-radius: 8px;
-    padding: 14px 18px;
+    padding: 15px 18px;
     cursor: pointer;
   }
   .btn-primary {
@@ -194,7 +243,7 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
   }
 
   h2.section-title {
-    font-size: 15px;
+    font-size: 17px;
     text-transform: none;
     color: var(--ink);
     font-weight: 700;
@@ -209,18 +258,18 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
     border-radius: 999px;
     background: var(--amber);
     color: white;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
   }
 
   .quick-question-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -232,7 +281,7 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
     display: flex;
     align-items: flex-start;
     gap: 8px;
-    font-size: 13px;
+    font-size: 14px;
     color: var(--ink);
     margin-top: 8px;
     line-height: 1.4;
@@ -251,17 +300,17 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
     display: flex; justify-content: space-between; align-items: center;
     margin-bottom: 6px;
   }
-  .entry-name { font-weight: 700; font-size: 15px; }
-  .entry-date { font-size: 12px; color: var(--muted); }
+  .entry-name { font-weight: 700; font-size: 17px; }
+  .entry-date { font-size: 13px; color: var(--muted); }
   .entry-snippet {
-    font-size: 13px; color: var(--muted);
+    font-size: 15px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     margin-bottom: 10px;
   }
   .badge {
     display: inline-block;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     padding: 3px 8px;
     border-radius: 999px;
@@ -276,17 +325,17 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
     border: 1px solid #C9D9EA;
     border-radius: 10px;
     padding: 12px 14px;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 600;
     color: var(--navy);
     line-height: 1.4;
     margin: 12px 0 10px;
   }
   .followup-box {
-    min-height: 90px;
+    min-height: 140px;
   }
   .followup-error {
-    font-size: 13px;
+    font-size: 14px;
     color: var(--danger);
     margin-top: 6px;
   }
@@ -295,7 +344,7 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
     border: 1px solid #EAD9B5;
     border-radius: 8px;
     padding: 10px 12px;
-    font-size: 13px;
+    font-size: 14px;
     color: #7A5B1E;
     line-height: 1.4;
     margin-top: 10px;
@@ -306,7 +355,7 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
     border-top: 1px solid var(--border);
   }
   .review-row {
-    font-size: 13px;
+    font-size: 15px;
     color: var(--ink);
     line-height: 1.5;
   }
@@ -317,14 +366,14 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
   .entry-actions { display: flex; gap: 8px; }
   .entry-actions button {
     flex: 1;
-    font-size: 13px;
-    padding: 9px 10px;
+    font-size: 14px;
+    padding: 10px 10px;
   }
 
   .empty {
     text-align: center;
     color: var(--muted);
-    font-size: 13px;
+    font-size: 14px;
     padding: 20px 0;
   }
 </style>
@@ -339,18 +388,24 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
 
 <main>
   <div class="card">
-    <div class="field-block">
-      <label for="employeeName">Your Name</label>
+    <div class="field-block" id="name-field-block">
+      <label for="employeeName" id="name-label">Your Name</label>
       <input type="text" id="employeeName" placeholder="e.g. Mike Torres" />
+    </div>
+    <div class="name-chip hidden" id="name-chip">
+      <span class="name-chip-text" id="name-chip-text"></span>
+      <button type="button" class="name-edit-btn" id="name-edit-btn" aria-label="Edit name">+</button>
     </div>
     <div class="field-block">
       <label for="logDate">Date</label>
       <input type="date" id="logDate" />
     </div>
 
-    <div class="mic-note">
-      🎙️ Tap the text box, then tap the microphone icon on your keyboard and just talk — job site, hours, what you did, materials, anything that slowed you down. Talk like you're telling your boss, not filling out a form.
+    <div class="mic-note" id="mic-note">
+      <span>🎙️ Tap the text box, then tap the microphone icon on your keyboard and just talk — job site, hours, what you did, materials, anything that slowed you down. Talk like you're telling your boss, not filling out a form.</span>
+      <button type="button" class="mic-note-close" id="mic-note-close" aria-label="Hide instructions">✕</button>
     </div>
+    <button type="button" class="mic-note-reopen hidden" id="mic-note-reopen">🎙️ Show tips</button>
 
     <div class="field-block">
       <label for="rawText">Tell me about your day</label>
@@ -424,6 +479,45 @@ window.addEventListener("offline", updateStatusBanner);
 /* ---------- defaults ---------- */
 document.getElementById("logDate").valueAsDate = new Date();
 document.getElementById("employeeName").value = localStorage.getItem(NAME_KEY) || "";
+
+/* ---------- name field: collapses to a chip once you've entered it once ---------- */
+// Saves rereading/retyping your own name every single report -- it's the
+// one field that almost never changes between entries.
+function setNameMode(mode) { // "edit" | "compact"
+  const input = document.getElementById("employeeName");
+  const label = document.getElementById("name-label");
+  const chip = document.getElementById("name-chip");
+  if (mode === "compact" && input.value.trim()) {
+    document.getElementById("name-chip-text").textContent = input.value.trim();
+    input.classList.add("hidden");
+    label.classList.add("hidden");
+    chip.classList.remove("hidden");
+  } else {
+    input.classList.remove("hidden");
+    label.classList.remove("hidden");
+    chip.classList.add("hidden");
+  }
+}
+setNameMode(document.getElementById("employeeName").value.trim() ? "compact" : "edit");
+
+document.getElementById("employeeName").addEventListener("blur", () => {
+  if (document.getElementById("employeeName").value.trim()) setNameMode("compact");
+});
+document.getElementById("name-edit-btn").addEventListener("click", () => {
+  setNameMode("edit");
+  document.getElementById("employeeName").focus();
+});
+
+/* ---------- mic-note: can be closed, stays closed across visits ---------- */
+const MIC_NOTE_KEY = "dailylog_mic_note_collapsed";
+function setMicNoteCollapsed(collapsed) {
+  document.getElementById("mic-note").classList.toggle("hidden", collapsed);
+  document.getElementById("mic-note-reopen").classList.toggle("hidden", !collapsed);
+  localStorage.setItem(MIC_NOTE_KEY, collapsed ? "1" : "0");
+}
+document.getElementById("mic-note-close").addEventListener("click", () => setMicNoteCollapsed(true));
+document.getElementById("mic-note-reopen").addEventListener("click", () => setMicNoteCollapsed(false));
+setMicNoteCollapsed(localStorage.getItem(MIC_NOTE_KEY) === "1");
 
 /* ---------- pre-save checklist ---------- */
 // Shows every unmet item at once, in the same chat-bubble style as the
