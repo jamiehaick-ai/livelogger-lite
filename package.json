@@ -1,0 +1,14 @@
+{
+  "name": "livelogger-lite",
+  "version": "2.0.0",
+  "description": "LiveLogger Lite -- voice-to-report daily log app -- local test server + static PWA front end",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  }
+}

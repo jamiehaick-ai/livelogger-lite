@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>LiveLogger Lite v2.0</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#14161A" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+/* =================================================================
+   CONFIG — this is the only section you should need to touch once
+   the electrician tells you what he actually wants on the report.
+   Add/remove/rename a field here and both the PDF layout and the
+   AI parsing schema update automatically.
+   ================================================================= */
+const REPORT_FIELDS = [
+  { key: "jobsite",         label: "Job Site / Address",  hint: "e.g. 412 Wooten Rd — Peterson residence", required: true },
+  { key: "hoursWorked",     label: "Hours Worked",        hint: "e.g. 7.5 hours, 6:30am–2:00pm", required: true },
+  { key: "tasksCompleted",  label: "Work Performed",      hint: "What got done today", required: true },
+  { key: "materialsUsed",   label: "Materials Used",      hint: "Parts, wire, fixtures pulled from the truck", required: false },
+  { key: "delaysIssues",    label: "Delays / Issues",     hint: "Anything that slowed the job down", required: false },
+  { key: "safetyNotes",     label: "Safety Notes",        hint: "Incidents, near-misses, PPE issues — leave blank if none", required: false },
+];
+
+const COMPANY_NAME = "Jamie Haick LLC";     // your test config — swap for his business name before handoff
+const PRODUCT_NAME = "LiveLogger Lite v2.0"; // shown on-screen only; PDFs still header with COMPANY_NAME
+const PARSE_ENDPOINT = "/api/parse";        // see api/parse-example.js — not live until deployed
+const RETENTION_DAYS = 14;                  // how long finished reports stay in the on-phone history list
+</script>
+
+<style>
+  :root {
+    --navy: #14161A;
+    --navy-light: #24272D;
+    --amber: #D93425;
+    --amber-dark: #B32A1D;
+    --paper: #F4F3F0;
+    --ink: #14161A;
+    --muted: #6B7280;
+    --border: #E1DED7;
+    --danger: #B3452B;
+    --ok: #3E6B4F;
+    --warn: #C9821E;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body { padding-bottom: 90px; }
+
+  header {
+    background: var(--navy);
+    color: white;
+    padding: 18px 20px 14px;
+    position: sticky; top: 0; z-index: 10;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    display: inline-block;
+    padding-bottom: 6px;
+    border-bottom: 3px solid var(--amber);
+  }
+  #status-line {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    display: flex; align-items: center; gap: 6px;
+    border: 1px solid var(--amber);
+    color: var(--amber);
+    border-radius: 999px;
+    padding: 5px 10px;
+    background: rgba(217, 52, 37, 0.08);
+  }
+  #status-line.offline {
+    border-color: var(--warn);
+    color: var(--warn);
+    background: rgba(201, 130, 30, 0.1);
+  }
+  .dot {
+    width: 7px; height: 7px; border-radius: 2px;
+    background: var(--amber);
+    flex-shrink: 0;
+  }
+  #status-line.offline .dot { background: var(--warn); }
+
+  .hidden { display: none; }
+  .offline-banner {
+    background: #FBF3E4;
+    color: #7A5B1E;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    padding: 8px 16px;
+    border-bottom: 1px solid #EAD9B5;
+  }
+
+  main { padding: 16px; max-width: 560px; margin: 0 auto; }
+
+  .card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 6px;
+  }
+  input[type=text], input[type=date], textarea {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 16px;
+    font-family: inherit;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  textarea { min-height: 140px; resize: vertical; line-height: 1.4; }
+  .field-block { margin-bottom: 14px; }
+  .field-hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .mic-note {
+    display: flex; align-items: flex-start; gap: 8px;
+    background: #FBF3E4;
+    border: 1px solid #EAD9B5;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: #7A5B1E;
+    margin-bottom: 14px;
+  }
+
+  button {
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 700;
+    border: none;
+    border-radius: 8px;
+    padding: 14px 18px;
+    cursor: pointer;
+  }
+  .btn-primary {
+    width: 100%;
+    background: var(--amber);
+    color: white;
+  }
+  .btn-primary:active { background: var(--amber-dark); }
+  .btn-secondary {
+    background: transparent;
+    color: var(--navy);
+    border: 1px solid var(--border);
+    width: 100%;
+  }
+  .btn-danger-outline {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    width: 100%;
+  }
+  .btn-danger {
+    background: var(--danger);
+    color: white;
+    width: 100%;
+  }
+  .danger-question {
+    background: #F7E7E2;
+    border-color: #E8C4B8;
+    color: var(--danger);
+  }
+  .delete-confirm {
+    margin-top: 10px;
+  }
+
+  h2.section-title {
+    font-size: 15px;
+    text-transform: none;
+    color: var(--ink);
+    font-weight: 700;
+    margin: 24px 0 10px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--amber);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .quick-question-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-bottom: 4px;
+  }
+
+  .status-line-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--ink);
+    margin-top: 8px;
+    line-height: 1.4;
+  }
+  .status-line-item.is-error { color: var(--danger); }
+  .status-line-item .icon { flex-shrink: 0; margin-top: 1px; }
+
+  .entry {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 10px;
+    background: white;
+  }
+  .entry-top {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px;
+  }
+  .entry-name { font-weight: 700; font-size: 15px; }
+  .entry-date { font-size: 12px; color: var(--muted); }
+  .entry-snippet {
+    font-size: 13px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    margin-bottom: 10px;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 999px;
+  }
+  .badge-pending { background: #FBF3E4; color: #7A5B1E; }
+  .badge-done { background: #E7F0EA; color: var(--ok); }
+  .badge-error { background: #F7E7E2; color: var(--danger); }
+  .badge-info { background: #E7EEF7; color: #2B5A8C; }
+
+  .chat-question {
+    background: #E7EEF7;
+    border: 1px solid #C9D9EA;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--navy);
+    line-height: 1.4;
+    margin: 12px 0 10px;
+  }
+  .followup-box {
+    min-height: 90px;
+  }
+  .followup-error {
+    font-size: 13px;
+    color: var(--danger);
+    margin-top: 6px;
+  }
+  .flag-note {
+    background: #FBF3E4;
+    border: 1px solid #EAD9B5;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: #7A5B1E;
+    line-height: 1.4;
+    margin-top: 10px;
+  }
+  .review-block {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .review-row {
+    font-size: 13px;
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  .review-row strong {
+    color: var(--navy);
+  }
+
+  .entry-actions { display: flex; gap: 8px; }
+  .entry-actions button {
+    flex: 1;
+    font-size: 13px;
+    padding: 9px 10px;
+  }
+
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 20px 0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="app-title">LiveLogger Lite v2.0</h1>
+  <div id="status-line"><span class="dot"></span><span id="status-text">Online</span></div>
+</header>
+<div id="offline-banner" class="offline-banner hidden">Offline — reports will save on this phone and sync later.</div>
+
+<main>
+  <div class="card">
+    <div class="field-block">
+      <label for="employeeName">Your Name</label>
+      <input type="text" id="employeeName" placeholder="e.g. Mike Torres" />
+    </div>
+    <div class="field-block">
+      <label for="logDate">Date</label>
+      <input type="date" id="logDate" />
+    </div>
+
+    <div class="mic-note">
+      🎙️ Tap the text box, then tap the microphone icon on your keyboard and just talk — job site, hours, what you did, materials, anything that slowed you down. Talk like you're telling your boss, not filling out a form.
+    </div>
+
+    <div class="field-block">
+      <label for="rawText">Tell me about your day</label>
+      <textarea id="rawText" placeholder="Ran rough-in on the second floor, pulled about 200 feet of 12-2, had to wait an hour on the inspector..."></textarea>
+    </div>
+
+    <div id="pre-save-issues"></div>
+
+    <button class="btn-primary" id="saveBtn">Save Report</button>
+  </div>
+
+  <h2 class="section-title">Needs a Couple Details <span class="count-badge hidden" id="needs-info-count"></span></h2>
+  <div id="needs-info-list"><div class="empty">Nothing waiting on you.</div></div>
+
+  <h2 class="section-title">Pending Sync <span class="count-badge hidden" id="pending-count"></span></h2>
+  <div id="pending-list"><div class="empty">Nothing waiting to sync.</div></div>
+
+  <h2 class="section-title">Completed Reports <span class="count-badge hidden" id="done-count"></span></h2>
+  <div id="done-list"><div class="empty">No reports yet.</div></div>
+</main>
+
+<script>
+document.getElementById("app-title").textContent = PRODUCT_NAME;
+
+/* ---------- storage ---------- */
+const STORAGE_KEY = "dailylog_entries_v1";
+const NAME_KEY = "dailylog_last_name";
+
+// Only prunes entries that are fully "done" -- anything still pending sync
+// or needing more info is never silently dropped, no matter how old.
+function pruneOldEntries(entries) {
+  const cutoffMs = RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  return entries.filter((e) => {
+    if (e.status !== "done") return true;
+    const created = new Date(e.createdAt).getTime();
+    return !isNaN(created) && (now - created) <= cutoffMs;
+  });
+}
+
+function loadEntries() {
+  let entries;
+  try { entries = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+  catch (e) { entries = []; }
+  const pruned = pruneOldEntries(entries);
+  if (pruned.length !== entries.length) saveEntries(pruned);
+  return pruned;
+}
+function saveEntries(entries) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+}
+
+/* ---------- online status ---------- */
+function updateStatusBanner() {
+  const statusLine = document.getElementById("status-line");
+  const text = document.getElementById("status-text");
+  const banner = document.getElementById("offline-banner");
+  if (navigator.onLine) {
+    statusLine.classList.remove("offline");
+    text.textContent = "Online";
+    banner.classList.add("hidden");
+  } else {
+    statusLine.classList.add("offline");
+    text.textContent = "Offline";
+    banner.classList.remove("hidden");
+  }
+}
+window.addEventListener("online", () => { updateStatusBanner(); processPendingQueue(); });
+window.addEventListener("offline", updateStatusBanner);
+
+/* ---------- defaults ---------- */
+document.getElementById("logDate").valueAsDate = new Date();
+document.getElementById("employeeName").value = localStorage.getItem(NAME_KEY) || "";
+
+/* ---------- pre-save checklist ---------- */
+// Shows every unmet item at once, in the same chat-bubble style as the
+// AI's own follow-up questions -- and each item drops off live as it's
+// fixed, instead of a browser popup that only ever names one thing.
+const PRE_SAVE_CHECKS = [
+  { label: "Your name",              check: () => document.getElementById("employeeName").value.trim().length > 0 },
+  { label: "Something about your day", check: () => document.getElementById("rawText").value.trim().length > 0 },
+];
+
+function renderPreSaveIssues() {
+  const box = document.getElementById("pre-save-issues");
+  const missing = PRE_SAVE_CHECKS.filter(c => !c.check());
+  if (!missing.length) { box.innerHTML = ""; return missing; }
+  box.innerHTML = `
+    <div class="chat-question">
+      Before this saves, still need: ${missing.map(m => m.label).join(", ")}.
+    </div>
+  `;
+  return missing;
+}
+
+document.getElementById("employeeName").addEventListener("input", (e) => {
+  renderPreSaveIssues();
+  // Save as they type, not just after a successful report -- so the name
+  // is remembered on this phone even if they never finish that first entry.
+  localStorage.setItem(NAME_KEY, e.target.value.trim());
+});
+document.getElementById("rawText").addEventListener("input", renderPreSaveIssues);
+
+/* ---------- save / queue ---------- */
+document.getElementById("saveBtn").addEventListener("click", () => {
+  if (renderPreSaveIssues().length) return;
+
+  const employee = document.getElementById("employeeName").value.trim();
+  const date = document.getElementById("logDate").value;
+  const rawText = document.getElementById("rawText").value.trim();
+
+  const entries = loadEntries();
+  entries.unshift({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    employee, date, rawText,
+    status: "pending",       // pending -> done | error
+    parsed: null,
+    createdAt: new Date().toISOString(),
+  });
+  saveEntries(entries);
+
+  document.getElementById("rawText").value = "";
+  renderLists();
+  processPendingQueue();
+});
+
+/* ---------- prior-reports context (same job site) ---------- */
+// Loose match on purpose -- "Peterson," "the Peterson job," and "Peterson
+// residence" are all the same job site to a person, so they should be to
+// this too. Strips common filler words, then checks either direction.
+function normalizeJobsite(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\b(the|a|an|on|at|in|near|of|job|jobsite|job site|residence|address|project|site)\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+function sameJobsite(a, b) {
+  const na = normalizeJobsite(a), nb = normalizeJobsite(b);
+  if (!na || !nb) return false;
+  return na.includes(nb) || nb.includes(na);
+}
+
+const PRIOR_REPORTS_LIMIT = 5; // how many past reports for this site to hand the AI as context
+
+function findPriorReportsForJobsite(jobsite, excludeId) {
+  if (!jobsite) return [];
+  const entries = loadEntries();
+  return entries
+    .filter(e => e.status === "done" && e.id !== excludeId && e.parsed && sameJobsite(e.parsed.jobsite, jobsite))
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, PRIOR_REPORTS_LIMIT)
+    .map(e => ({ date: e.date, ...e.parsed }));
+}
+
+/* ---------- AI parsing ---------- */
+// Runs the parse once. If the result turns out to belong to a job site with
+// prior history, runs it a second time with that history included so the
+// AI can catch contradictions and reuse established site-specific context.
+// The extra call only happens when there's actually history to use -- a
+// brand-new job site costs exactly what it did before.
+async function callParseApi(entry, priorReports) {
+  const payload = {
+    rawText: entry.rawText,
+    employee: entry.employee,
+    date: entry.date,
+    fields: REPORT_FIELDS.map(f => ({ key: f.key, label: f.label })),
+    priorReports,
+  };
+
+  const res = await fetch(PARSE_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    // Surface the real reason (e.g. a missing API key) instead of guessing —
+    // this is what shows up on the "Retry needed" card below.
+    throw new Error(body.error || `Couldn't reach the AI (error ${res.status})`);
+  }
+
+  return res.json(); // { values: {...}, flags: [...] }
+}
+
+async function parseEntry(entry) {
+  let result = await callParseApi(entry, []);
+  const jobsite = result.values && result.values.jobsite;
+  const priorReports = findPriorReportsForJobsite(jobsite, entry.id);
+  if (priorReports.length) {
+    result = await callParseApi(entry, priorReports);
+  }
+  return result; // { values, flags }
+}
+
+/* ---------- required-field check ---------- */
+function missingRequiredFields(parsed) {
+  if (!parsed) return REPORT_FIELDS.filter(f => f.required);
+  return REPORT_FIELDS.filter(f => f.required && !String(parsed[f.key] || "").trim());
+}
+
+async function processPendingQueue() {
+  if (!navigator.onLine) return;
+  const entries = loadEntries();
+  let changed = false;
+
+  for (const entry of entries) {
+    // Retries both freshly-saved entries and ones that previously failed to
+    // reach the AI -- so a connection problem clears itself automatically
+    // the moment the server's actually reachable again.
+    if (entry.status !== "pending" && entry.status !== "error") continue;
+    try {
+      const result = await parseEntry(entry);
+      entry.parsed = result.values;
+      entry.flags = result.flags || [];
+      // A correction can explicitly change the date itself (e.g. "this was
+      // actually yesterday"), not just the report fields -- apply that here.
+      if (result.date && /^\d{4}-\d{2}-\d{2}$/.test(result.date)) {
+        entry.date = result.date;
+      }
+      entry.status = missingRequiredFields(entry.parsed).length ? "needs_info" : "done";
+      entry.lastError = null;
+    } catch (e) {
+      entry.status = "error";
+      entry.lastError = e.message;
+    }
+    changed = true;
+  }
+  if (changed) { saveEntries(entries); renderLists(); }
+}
+
+/* ---------- filling in what the AI missed ---------- */
+// Instead of small per-field boxes, the missing info gets asked back as a
+// plain question and answered in the same big dictation box as the first
+// pass -- same one-handed, gloves-on interaction the whole app uses.
+function answerMissingInfo(id, followUpText) {
+  const entries = loadEntries();
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+
+  entry.rawText = entry.rawText + "\n\nFollow-up: " + followUpText;
+  entry.status = "pending";
+  saveEntries(entries);
+  renderLists();
+  processPendingQueue();
+}
+
+/* ---------- fixing something wrong or misheard, after the fact ---------- */
+// Same shape as answerMissingInfo, but for a completed report -- lets a
+// mis-hear or a genuine mistake get corrected before (or after) the PDF is
+// downloaded, without ever touching a small per-field text box.
+function editEntry(id, correctionText) {
+  const entries = loadEntries();
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+
+  entry.rawText = entry.rawText + "\n\nCorrection from the worker after reviewing the report: " + correctionText;
+  entry.status = "pending";
+  entry.flags = [];
+  saveEntries(entries);
+  renderLists();
+  processPendingQueue();
+}
+
+/* ---------- PDF generation ---------- */
+function buildPdf(entry) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt", format: "letter" });
+  const marginX = 54;
+  let y = 60;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text(COMPANY_NAME + " — Daily Report", marginX, y);
+  y += 22;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(11);
+  doc.text(`Employee: ${entry.employee}`, marginX, y);
+  doc.text(`Date: ${entry.date}`, 340, y);
+  y += 20;
+
+  doc.setDrawColor(200);
+  doc.line(marginX, y, 558, y);
+  y += 20;
+
+  const values = entry.parsed || {};
+  REPORT_FIELDS.forEach((field) => {
+    const value = (values[field.key] || "").toString().trim() || "—";
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.text(field.label, marginX, y);
+    y += 14;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    const lines = doc.splitTextToSize(value, 504);
+    doc.text(lines, marginX, y);
+    y += lines.length * 14 + 14;
+
+    if (y > 700) { doc.addPage(); y = 60; }
+  });
+
+  return doc;
+}
+
+function downloadPdf(entry) {
+  const doc = buildPdf(entry);
+  // Include a time stamp -- two reports on the same day for the same
+  // employee used to produce the exact same filename and could overwrite
+  // or get confused with each other in a downloads folder.
+  const created = new Date(entry.createdAt);
+  const hh = String(created.getHours()).padStart(2, "0");
+  const mm = String(created.getMinutes()).padStart(2, "0");
+  const filename = `${entry.date}_${hh}${mm}_${entry.employee.replace(/\s+/g, "-")}_daily-log.pdf`;
+  doc.save(filename);
+}
+
+/* ---------- delete (two-tap confirm, no browser popups) ---------- */
+function deleteEntry(id) {
+  const entries = loadEntries().filter(e => e.id !== id);
+  saveEntries(entries);
+  renderLists();
+}
+
+function deleteButtonMarkup(id) {
+  return `<button class="btn-danger-outline" data-action="delete-prompt" data-id="${id}">Delete</button>`;
+}
+
+function deleteConfirmMarkup(id) {
+  return `
+    <div class="delete-confirm" data-delete-confirm-for="${id}" style="display:none;">
+      <div class="chat-question danger-question">Delete this report? This can't be undone.</div>
+      <div class="entry-actions" style="margin-top:8px;">
+        <button class="btn-danger" data-action="delete-confirm" data-id="${id}">Yes, Delete</button>
+        <button class="btn-secondary" data-action="delete-cancel" data-id="${id}">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
+function wireDeleteHandlers(container) {
+  container.querySelectorAll('[data-action="delete-prompt"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const box = container.querySelector(`[data-delete-confirm-for="${btn.dataset.id}"]`);
+      if (box) box.style.display = "block";
+    });
+  });
+  container.querySelectorAll('[data-action="delete-cancel"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const box = container.querySelector(`[data-delete-confirm-for="${btn.dataset.id}"]`);
+      if (box) box.style.display = "none";
+    });
+  });
+  container.querySelectorAll('[data-action="delete-confirm"]').forEach(btn => {
+    btn.addEventListener("click", () => deleteEntry(btn.dataset.id));
+  });
+}
+
+/* ---------- rendering ---------- */
+function setCountBadge(id, n) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (n > 0) { el.textContent = n; el.classList.remove("hidden"); }
+  else { el.textContent = ""; el.classList.add("hidden"); }
+}
+
+function renderLists() {
+  const entries = loadEntries();
+  const pending = entries.filter(e => e.status === "pending" || e.status === "error");
+  const needsInfo = entries.filter(e => e.status === "needs_info");
+  const done = entries.filter(e => e.status === "done");
+
+  setCountBadge("needs-info-count", needsInfo.length);
+  setCountBadge("pending-count", pending.length);
+  setCountBadge("done-count", done.length);
+
+  const CHECK_ICON = `<svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 13l4 4L19 7" stroke="#3E6B4F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const WARN_ICON = `<svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3.5 22 20H2L12 3.5Z" stroke="#B3452B" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4.5" stroke="#B3452B" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.2" r="1" fill="#B3452B"/></svg>`;
+
+  const pendingEl = document.getElementById("pending-list");
+  pendingEl.innerHTML = pending.length ? "" : '<div class="empty">Nothing waiting to sync.</div>';
+  pending.forEach(entry => {
+    const statusLine = entry.status === "error"
+      ? `<div class="status-line-item is-error">${WARN_ICON}<span>Couldn't reach the server just now. Might be on our end — give it another shot.${entry.lastError ? ` <span style="color:var(--muted); font-weight:400;">(${entry.lastError})</span>` : ""}</span></div>`
+      : `<div class="status-line-item">${CHECK_ICON}<span>Sent — just waiting on the write-up.</span></div>`;
+    const retryBtn = entry.status === "error"
+      ? `<div class="entry-actions" style="margin-top:10px;"><button class="btn-secondary" data-action="retry" data-id="${entry.id}">Retry Now</button></div>`
+      : "";
+    pendingEl.insertAdjacentHTML("beforeend", `
+      <div class="entry">
+        <div class="entry-top">
+          <span class="entry-name">${entry.employee}</span>
+          <span class="entry-date">${entry.date}</span>
+        </div>
+        <div class="entry-snippet">${entry.rawText}</div>
+        ${statusLine}
+        ${retryBtn}
+        <div class="entry-actions" style="margin-top:10px;">
+          ${deleteButtonMarkup(entry.id)}
+        </div>
+        ${deleteConfirmMarkup(entry.id)}
+      </div>
+    `);
+  });
+  pendingEl.querySelectorAll('[data-action="retry"]').forEach(btn => {
+    btn.addEventListener("click", () => processPendingQueue());
+  });
+  wireDeleteHandlers(pendingEl);
+
+  const needsInfoEl = document.getElementById("needs-info-list");
+  needsInfoEl.innerHTML = needsInfo.length ? "" : '<div class="empty">Nothing waiting on you.</div>';
+  needsInfo.forEach(entry => {
+    const missing = missingRequiredFields(entry.parsed);
+    const labels = missing.map(f => f.label);
+    const question = labels.length === 1
+      ? `Still need: ${labels[0]}. Tap below and tell me.`
+      : `Still need a couple things: ${labels.join(" and ")}. Tap below and tell me.`;
+
+    const wrap = document.createElement("div");
+    wrap.className = "entry";
+    wrap.innerHTML = `
+      <div class="entry-top">
+        <span class="entry-name">${entry.employee}</span>
+        <span class="entry-date">${entry.date}</span>
+      </div>
+      <div class="entry-snippet">${entry.rawText}</div>
+      <div class="quick-question-label">Quick question</div>
+      <div class="chat-question">${question}</div>
+      <textarea class="followup-box" data-followup-for="${entry.id}" placeholder="Tap here, use your keyboard mic, and just say it"></textarea>
+      <div class="followup-error" data-error-for="${entry.id}" style="display:none;"></div>
+      <button class="btn-primary" data-action="answer" data-id="${entry.id}" style="margin-top:10px;">Send Answer</button>
+      <div class="entry-actions" style="margin-top:10px;">
+        ${deleteButtonMarkup(entry.id)}
+      </div>
+      ${deleteConfirmMarkup(entry.id)}
+    `;
+    needsInfoEl.appendChild(wrap);
+  });
+  needsInfoEl.querySelectorAll('.followup-box').forEach(box => {
+    box.addEventListener("input", () => {
+      const err = needsInfoEl.querySelector(`[data-error-for="${box.dataset.followupFor}"]`);
+      if (err) err.style.display = "none";
+    });
+  });
+  needsInfoEl.querySelectorAll('[data-action="answer"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      const textarea = needsInfoEl.querySelector(`[data-followup-for="${id}"]`);
+      const errBox = needsInfoEl.querySelector(`[data-error-for="${id}"]`);
+      const followUp = textarea.value.trim();
+      if (!followUp) {
+        errBox.textContent = "Say or type an answer first.";
+        errBox.style.display = "block";
+        return;
+      }
+      answerMissingInfo(id, followUp);
+    });
+  });
+  wireDeleteHandlers(needsInfoEl);
+
+  const doneEl = document.getElementById("done-list");
+  doneEl.innerHTML = done.length ? "" : '<div class="empty">No reports yet.</div>';
+  done.forEach(entry => {
+    const flags = entry.flags || [];
+    const flagsHtml = flags.length ? `
+      <div class="flag-note">
+        ${flags.map(f => `⚠️ ${f}`).join("<br>")}
+      </div>
+    ` : "";
+    // Full field-by-field review so a misheard word is actually visible
+    // before it goes out the door, not just a one-line snippet.
+    const reviewHtml = REPORT_FIELDS.map(f => `
+      <div class="review-row"><strong>${f.label}:</strong> ${(entry.parsed && entry.parsed[f.key]) || "—"}</div>
+    `).join("");
+
+    const wrap = document.createElement("div");
+    wrap.className = "entry";
+    wrap.innerHTML = `
+      <div class="entry-top">
+        <span class="entry-name">${entry.employee}</span>
+        <span class="entry-date">${entry.date}</span>
+      </div>
+      <div class="review-block">${reviewHtml}</div>
+      ${flagsHtml}
+      <div class="entry-actions" style="margin-top:10px;">
+        <button class="btn-secondary" data-action="toggle-edit" data-id="${entry.id}">Fix Something</button>
+        <button class="btn-secondary" data-action="pdf" data-id="${entry.id}">Download PDF</button>
+      </div>
+      <div class="edit-box" data-edit-for="${entry.id}" style="display:none; margin-top:12px;">
+        <div class="chat-question">What needs fixing? Tell me and I'll update it.</div>
+        <textarea class="followup-box" data-edit-input-for="${entry.id}" placeholder="e.g. it's rough-in, not Ruffin -- or the hours should be 8, not 6.5"></textarea>
+        <div class="followup-error" data-edit-error-for="${entry.id}" style="display:none;"></div>
+        <button class="btn-primary" data-action="submit-edit" data-id="${entry.id}" style="margin-top:10px;">Submit Fix</button>
+      </div>
+      <div class="entry-actions" style="margin-top:10px;">
+        ${deleteButtonMarkup(entry.id)}
+      </div>
+      ${deleteConfirmMarkup(entry.id)}
+    `;
+    doneEl.appendChild(wrap);
+  });
+
+  doneEl.querySelectorAll('[data-action="pdf"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const e = loadEntries().find(x => x.id === btn.dataset.id);
+      if (e) downloadPdf(e);
+    });
+  });
+  doneEl.querySelectorAll('[data-action="toggle-edit"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const box = doneEl.querySelector(`[data-edit-for="${btn.dataset.id}"]`);
+      box.style.display = box.style.display === "none" ? "block" : "none";
+    });
+  });
+  doneEl.querySelectorAll('[data-edit-input-for]').forEach(box => {
+    box.addEventListener("input", () => {
+      const err = doneEl.querySelector(`[data-edit-error-for="${box.dataset.editInputFor}"]`);
+      if (err) err.style.display = "none";
+    });
+  });
+  doneEl.querySelectorAll('[data-action="submit-edit"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      const textarea = doneEl.querySelector(`[data-edit-input-for="${id}"]`);
+      const errBox = doneEl.querySelector(`[data-edit-error-for="${id}"]`);
+      const correction = textarea.value.trim();
+      if (!correction) {
+        errBox.textContent = "Say or type what needs fixing first.";
+        errBox.style.display = "block";
+        return;
+      }
+      editEntry(id, correction);
+    });
+  });
+  wireDeleteHandlers(doneEl);
+}
+
+/* ---------- boot ---------- */
+updateStatusBanner();
+renderLists();
+processPendingQueue();
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(err => console.warn("SW failed:", err));
+}
+</script>
+</body>
+</html>
