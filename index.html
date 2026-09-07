@@ -25,8 +25,8 @@ const REPORT_FIELDS = [
   { key: "safetyNotes",     label: "Safety Notes",        hint: "Incidents, near-misses, PPE issues — leave blank if none", required: false },
 ];
 
-const COMPANY_NAME = "Jamie Haick LLC";     // your test config — swap for his business name before handoff
-const PRODUCT_NAME = "LiveLogger Lite v2.0"; // shown on-screen only; PDFs still header with COMPANY_NAME
+const COMPANY_NAME = "Jamie Haick LLC";     // NOT currently shown on the PDF -- waiting to hear what he wants on it. Wire back in once he answers.
+const PRODUCT_NAME = "LiveLogger Lite v2.0"; // shown on-screen only
 const PARSE_ENDPOINT = "/api/parse";        // see api/parse-example.js — not live until deployed
 const RETENTION_DAYS = 14;                  // how long finished reports stay in the on-phone history list
 </script>
@@ -753,7 +753,7 @@ function buildPdf(entry) {
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
-  doc.text(COMPANY_NAME + " — Daily Report", marginX, y);
+  doc.text("Daily Report", marginX, y);
   y += 22;
 
   doc.setFont("helvetica", "normal");
