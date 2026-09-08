@@ -1,5 +1,5 @@
 // Bumping CACHE_NAME forces old cached files to be replaced on next load.
-const CACHE_NAME = "livelogger-lite-v8";
+const CACHE_NAME = "livelogger-lite-v9";
 const SHELL_FILES = [
   "./",
   "./index.html",

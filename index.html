@@ -626,6 +626,16 @@ function findPriorReportsForJobsite(jobsite, excludeId) {
 // AI can catch contradictions and reuse established site-specific context.
 // The extra call only happens when there's actually history to use -- a
 // brand-new job site costs exactly what it did before.
+// A single parse call can't be allowed to hang forever. Without a ceiling,
+// a fetch that stalls -- cell handoff, captive portal, or the installed app
+// getting suspended by the phone mid-request -- never settles. And since
+// parseAndUpdateEntry holds the entry "in flight" until this returns, one
+// stalled call wedges that entry for good: the background queue AND a
+// "Retry Now" tap both skip an id that's already in flight, so the only way
+// out is force-killing the app. Aborting after a bounded wait turns that
+// dead state back into an ordinary, retryable error.
+const PARSE_TIMEOUT_MS = 45000;
+
 async function callParseApi(entry, priorReports) {
   const payload = {
     rawText: entry.rawText,
@@ -635,20 +645,34 @@ async function callParseApi(entry, priorReports) {
     priorReports,
   };
 
-  const res = await fetch(PARSE_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PARSE_TIMEOUT_MS);
+  try {
+    const res = await fetch(PARSE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
 
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    // Surface the real reason (e.g. a missing API key) instead of guessing —
-    // this is what shows up on the "Retry needed" card below.
-    throw new Error(body.error || `Couldn't reach the AI (error ${res.status})`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      // Surface the real reason (e.g. a missing API key) instead of guessing —
+      // this is what shows up on the "Retry needed" card below.
+      throw new Error(body.error || `Couldn't reach the AI (error ${res.status})`);
+    }
+
+    return await res.json(); // { values: {...}, flags: [...] }
+  } catch (e) {
+    // The abort above surfaces here as an AbortError -- give it a plain
+    // message instead of the browser's "signal is aborted without reason".
+    if (e.name === "AbortError") {
+      throw new Error("Timed out reaching the server — give it another shot.");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-
-  return res.json(); // { values: {...}, flags: [...] }
 }
 
 async function parseEntry(entry) {
@@ -703,10 +727,14 @@ async function parseAndUpdateEntry(entry) {
     } catch (e) {
       entry.status = "error";
       entry.lastError = e.message;
+      entry.lastTriedAt = new Date().toISOString(); // shown on the card so a repeat failure visibly registers
     }
     mergeEntryIntoStorage(entry);
   } finally {
     _inFlightIds.delete(entry.id);
+    // Re-render on every completion path, no matter who kicked this off, so
+    // a "Retrying…" / disabled button is never left stranded on screen.
+    renderLists();
   }
 }
 
@@ -718,15 +746,21 @@ async function parseAndUpdateEntry(entry) {
 // attempts the fetch and lets the real result -- success or a real
 // network error -- speak for itself.
 async function retryEntry(id, btn) {
-  const entries = loadEntries();
-  const entry = entries.find(e => e.id === id);
-  if (!entry || _inFlightIds.has(id)) return;
+  const entry = loadEntries().find(e => e.id === id);
+  if (!entry) return;
 
-  const originalLabel = btn ? btn.textContent : null;
+  // Give feedback on every tap -- even when a background attempt for this
+  // same entry is already running. Silently returning here (the old
+  // behaviour) is exactly what made the button feel dead: the boot-time
+  // queue often has this entry in flight for a few seconds right after the
+  // app opens, and any tap in that window did nothing at all, with no
+  // visible change. If one's already in flight, just flip the button; that
+  // attempt re-renders on its own when it lands (now bounded by
+  // PARSE_TIMEOUT_MS, so it can't stay stuck).
   if (btn) { btn.textContent = "Retrying…"; btn.disabled = true; }
+  if (_inFlightIds.has(id)) return;
 
-  await parseAndUpdateEntry(entry);
-  renderLists(); // rebuilds this button too, so no need to restore it manually on success
+  await parseAndUpdateEntry(entry); // re-renders itself on every completion path
 }
 
 async function processPendingQueue() {
@@ -806,7 +840,7 @@ function buildPdf(entry) {
   doc.setFontSize(11);
   ensureSpace(20);
   doc.text(`Employee: ${entry.employee}`, marginX, y);
-  doc.text(`Date: ${entry.date}`, 340, y);
+  doc.text(`Date: ${fmtDate(entry.date)}`, 340, y);
   y += 20;
 
   doc.setDrawColor(200);
@@ -901,6 +935,23 @@ function setCountBadge(id, n) {
   else { el.textContent = ""; el.classList.add("hidden"); }
 }
 
+// "1:41 PM" (local). Just enough to prove to the person that a fresh
+// attempt actually happened when they tapped Retry -- otherwise a repeat
+// failure re-renders an identical card and looks like the button did nothing.
+function shortTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+// Storage always keeps the canonical YYYY-MM-DD (everything that sorts,
+// compares dates, or names a file still uses entry.date raw). This is the
+// human-facing MM/DD/YYYY form -- used on the report cards and in the PDF.
+function fmtDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  return m ? `${m[2]}/${m[3]}/${m[1]}` : String(iso || "");
+}
+
 function renderLists() {
   const entries = loadEntries();
   const pending = entries.filter(e => e.status === "pending" || e.status === "error");
@@ -917,8 +968,11 @@ function renderLists() {
   const pendingEl = document.getElementById("pending-list");
   pendingEl.innerHTML = pending.length ? "" : '<div class="empty">Nothing waiting to sync.</div>';
   pending.forEach(entry => {
+    const triedLine = entry.status === "error" && entry.lastTriedAt
+      ? `<br><span style="color:var(--muted); font-weight:400;">Last tried ${escapeHtml(shortTime(entry.lastTriedAt))}</span>`
+      : "";
     const statusLine = entry.status === "error"
-      ? `<div class="status-line-item is-error">${WARN_ICON}<span>Couldn't reach the server just now. Might be on our end — give it another shot.${entry.lastError ? ` <span style="color:var(--muted); font-weight:400;">(${escapeHtml(entry.lastError)})</span>` : ""}</span></div>`
+      ? `<div class="status-line-item is-error">${WARN_ICON}<span>Couldn't reach the server just now. Might be on our end — give it another shot.${entry.lastError ? ` <span style="color:var(--muted); font-weight:400;">(${escapeHtml(entry.lastError)})</span>` : ""}${triedLine}</span></div>`
       : `<div class="status-line-item">${CHECK_ICON}<span>Sent — just waiting on the write-up.</span></div>`;
     const retryBtn = entry.status === "error"
       ? `<div class="entry-actions" style="margin-top:10px;"><button class="btn-secondary" data-action="retry" data-id="${entry.id}">Retry Now</button></div>`
@@ -927,7 +981,7 @@ function renderLists() {
       <div class="entry">
         <div class="entry-top">
           <span class="entry-name">${escapeHtml(entry.employee)}</span>
-          <span class="entry-date">${escapeHtml(entry.date)}</span>
+          <span class="entry-date">${escapeHtml(fmtDate(entry.date))}</span>
         </div>
         <div class="entry-snippet">${escapeHtml(entry.rawText)}</div>
         ${statusLine}
@@ -958,7 +1012,7 @@ function renderLists() {
     wrap.innerHTML = `
       <div class="entry-top">
         <span class="entry-name">${escapeHtml(entry.employee)}</span>
-        <span class="entry-date">${escapeHtml(entry.date)}</span>
+        <span class="entry-date">${escapeHtml(fmtDate(entry.date))}</span>
       </div>
       <div class="entry-snippet">${escapeHtml(entry.rawText)}</div>
       <div class="quick-question-label">Quick question</div>
@@ -1015,7 +1069,7 @@ function renderLists() {
     wrap.innerHTML = `
       <div class="entry-top">
         <span class="entry-name">${escapeHtml(entry.employee)}</span>
-        <span class="entry-date">${escapeHtml(entry.date)}</span>
+        <span class="entry-date">${escapeHtml(fmtDate(entry.date))}</span>
       </div>
       <div class="review-block">${reviewHtml}</div>
       ${flagsHtml}
