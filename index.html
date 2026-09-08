@@ -432,6 +432,18 @@ const RETENTION_DAYS = 14;                  // how long finished reports stay in
 document.getElementById("app-title").textContent = PRODUCT_NAME;
 
 /* ---------- storage ---------- */
+// Every render function below builds HTML via template literals with
+// dynamic values -- the person's own dictation, AI-parsed fields, error
+// messages. Since each phone only ever displays its own owner's own data
+// this is realistically self-XSS, not a cross-user attack, but there's no
+// reason to leave it unescaped. Applied everywhere a dynamic value lands
+// inside innerHTML below.
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
 const STORAGE_KEY = "dailylog_entries_v1";
 const NAME_KEY = "dailylog_last_name";
 
@@ -478,7 +490,14 @@ window.addEventListener("online", () => { updateStatusBanner(); processPendingQu
 window.addEventListener("offline", updateStatusBanner);
 
 /* ---------- defaults ---------- */
-document.getElementById("logDate").valueAsDate = new Date();
+// valueAsDate reads/writes UTC, not local time -- setting it directly from
+// `new Date()` rolls the date to tomorrow in any UTC-negative timezone once
+// local time crosses midnight UTC (e.g. after ~5-8pm in the US). This is an
+// end-of-shift app used in the evening, so that's not an edge case -- build
+// the YYYY-MM-DD string from local date parts instead.
+const _today = new Date();
+document.getElementById("logDate").value =
+  `${_today.getFullYear()}-${String(_today.getMonth() + 1).padStart(2, "0")}-${String(_today.getDate()).padStart(2, "0")}`;
 document.getElementById("employeeName").value = localStorage.getItem(NAME_KEY) || "";
 
 /* ---------- name field: collapses to a chip once you've entered it once ---------- */
@@ -649,6 +668,48 @@ function missingRequiredFields(parsed) {
 }
 
 // Manual retry, triggered by tapping "Retry Now" on one specific entry.
+// Shared by processPendingQueue and retryEntry, both of which used to do a
+// read-modify-write of the ENTIRE entries array across an await. That's a
+// real data-loss bug: if a second save happened while the first was still
+// awaiting its fetch, whichever one finished last would write back its own
+// stale snapshot and silently erase whatever the other had saved in between.
+// Fixed two ways: an in-flight guard so the same entry is never parsed
+// twice concurrently, and merging just this one entry back into whatever
+// storage actually looks like *right now* -- never overwriting the array
+// wholesale from an old snapshot.
+const _inFlightIds = new Set();
+
+function mergeEntryIntoStorage(updatedEntry) {
+  const current = loadEntries();
+  const idx = current.findIndex(e => e.id === updatedEntry.id);
+  if (idx === -1) return; // deleted while this was in flight -- don't resurrect it
+  current[idx] = updatedEntry;
+  saveEntries(current);
+}
+
+async function parseAndUpdateEntry(entry) {
+  if (_inFlightIds.has(entry.id)) return; // already being parsed elsewhere -- don't double-spend the API call
+  _inFlightIds.add(entry.id);
+  try {
+    try {
+      const result = await parseEntry(entry);
+      entry.parsed = result.values;
+      entry.flags = result.flags || [];
+      if (result.date && /^\d{4}-\d{2}-\d{2}$/.test(result.date)) {
+        entry.date = result.date;
+      }
+      entry.status = missingRequiredFields(entry.parsed).length ? "needs_info" : "done";
+      entry.lastError = null;
+    } catch (e) {
+      entry.status = "error";
+      entry.lastError = e.message;
+    }
+    mergeEntryIntoStorage(entry);
+  } finally {
+    _inFlightIds.delete(entry.id);
+  }
+}
+
 // Deliberately does NOT gate on navigator.onLine like the background queue
 // does -- that flag is known to misreport (stuck "false" right after
 // reconnecting, or just wrong on some phones/networks), and if the
@@ -659,56 +720,28 @@ function missingRequiredFields(parsed) {
 async function retryEntry(id, btn) {
   const entries = loadEntries();
   const entry = entries.find(e => e.id === id);
-  if (!entry) return;
+  if (!entry || _inFlightIds.has(id)) return;
 
   const originalLabel = btn ? btn.textContent : null;
   if (btn) { btn.textContent = "Retrying…"; btn.disabled = true; }
 
-  try {
-    const result = await parseEntry(entry);
-    entry.parsed = result.values;
-    entry.flags = result.flags || [];
-    if (result.date && /^\d{4}-\d{2}-\d{2}$/.test(result.date)) {
-      entry.date = result.date;
-    }
-    entry.status = missingRequiredFields(entry.parsed).length ? "needs_info" : "done";
-    entry.lastError = null;
-  } catch (e) {
-    entry.status = "error";
-    entry.lastError = e.message;
-  }
-  saveEntries(entries);
+  await parseAndUpdateEntry(entry);
   renderLists(); // rebuilds this button too, so no need to restore it manually on success
 }
 
 async function processPendingQueue() {
   if (!navigator.onLine) return;
-  const entries = loadEntries();
-  let changed = false;
-
-  for (const entry of entries) {
-    // Retries both freshly-saved entries and ones that previously failed to
-    // reach the AI -- so a connection problem clears itself automatically
-    // the moment the server's actually reachable again.
-    if (entry.status !== "pending" && entry.status !== "error") continue;
-    try {
-      const result = await parseEntry(entry);
-      entry.parsed = result.values;
-      entry.flags = result.flags || [];
-      // A correction can explicitly change the date itself (e.g. "this was
-      // actually yesterday"), not just the report fields -- apply that here.
-      if (result.date && /^\d{4}-\d{2}-\d{2}$/.test(result.date)) {
-        entry.date = result.date;
-      }
-      entry.status = missingRequiredFields(entry.parsed).length ? "needs_info" : "done";
-      entry.lastError = null;
-    } catch (e) {
-      entry.status = "error";
-      entry.lastError = e.message;
-    }
-    changed = true;
+  // Retries both freshly-saved entries and ones that previously failed to
+  // reach the AI -- so a connection problem clears itself automatically
+  // the moment the server's actually reachable again.
+  const toProcess = loadEntries().filter(e =>
+    (e.status === "pending" || e.status === "error") && !_inFlightIds.has(e.id)
+  );
+  if (!toProcess.length) return;
+  for (const entry of toProcess) {
+    await parseAndUpdateEntry(entry);
   }
-  if (changed) { saveEntries(entries); renderLists(); }
+  renderLists();
 }
 
 /* ---------- filling in what the AI missed ---------- */
@@ -749,20 +782,35 @@ function buildPdf(entry) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "pt", format: "letter" });
   const marginX = 54;
+  const pageBottom = 740; // usable bottom margin before a new page is needed
+  const lineHeight = 14;
   let y = 60;
+
+  // Checked BEFORE drawing, not after -- the old version only added a page
+  // once content had already been written past the bottom margin, which
+  // silently clipped a long field's text off the page.
+  function ensureSpace(neededHeight) {
+    if (y + neededHeight > pageBottom) {
+      doc.addPage();
+      y = 60;
+    }
+  }
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
+  ensureSpace(22);
   doc.text("Daily Report", marginX, y);
   y += 22;
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
+  ensureSpace(20);
   doc.text(`Employee: ${entry.employee}`, marginX, y);
   doc.text(`Date: ${entry.date}`, 340, y);
   y += 20;
 
   doc.setDrawColor(200);
+  ensureSpace(20);
   doc.line(marginX, y, 558, y);
   y += 20;
 
@@ -770,18 +818,23 @@ function buildPdf(entry) {
   REPORT_FIELDS.forEach((field) => {
     const value = (values[field.key] || "").toString().trim() || "—";
 
+    ensureSpace(lineHeight * 2); // label plus at least one line of body
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.text(field.label, marginX, y);
-    y += 14;
+    y += lineHeight;
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(11);
     const lines = doc.splitTextToSize(value, 504);
-    doc.text(lines, marginX, y);
-    y += lines.length * 14 + 14;
-
-    if (y > 700) { doc.addPage(); y = 60; }
+    // Drawn line-by-line, checking space before each one, so a long value
+    // spans onto the next page instead of running off the bottom of this one.
+    for (const line of lines) {
+      ensureSpace(lineHeight);
+      doc.text(line, marginX, y);
+      y += lineHeight;
+    }
+    y += lineHeight; // gap before the next field
   });
 
   return doc;
@@ -865,7 +918,7 @@ function renderLists() {
   pendingEl.innerHTML = pending.length ? "" : '<div class="empty">Nothing waiting to sync.</div>';
   pending.forEach(entry => {
     const statusLine = entry.status === "error"
-      ? `<div class="status-line-item is-error">${WARN_ICON}<span>Couldn't reach the server just now. Might be on our end — give it another shot.${entry.lastError ? ` <span style="color:var(--muted); font-weight:400;">(${entry.lastError})</span>` : ""}</span></div>`
+      ? `<div class="status-line-item is-error">${WARN_ICON}<span>Couldn't reach the server just now. Might be on our end — give it another shot.${entry.lastError ? ` <span style="color:var(--muted); font-weight:400;">(${escapeHtml(entry.lastError)})</span>` : ""}</span></div>`
       : `<div class="status-line-item">${CHECK_ICON}<span>Sent — just waiting on the write-up.</span></div>`;
     const retryBtn = entry.status === "error"
       ? `<div class="entry-actions" style="margin-top:10px;"><button class="btn-secondary" data-action="retry" data-id="${entry.id}">Retry Now</button></div>`
@@ -873,10 +926,10 @@ function renderLists() {
     pendingEl.insertAdjacentHTML("beforeend", `
       <div class="entry">
         <div class="entry-top">
-          <span class="entry-name">${entry.employee}</span>
-          <span class="entry-date">${entry.date}</span>
+          <span class="entry-name">${escapeHtml(entry.employee)}</span>
+          <span class="entry-date">${escapeHtml(entry.date)}</span>
         </div>
-        <div class="entry-snippet">${entry.rawText}</div>
+        <div class="entry-snippet">${escapeHtml(entry.rawText)}</div>
         ${statusLine}
         ${retryBtn}
         <div class="entry-actions" style="margin-top:10px;">
@@ -904,10 +957,10 @@ function renderLists() {
     wrap.className = "entry";
     wrap.innerHTML = `
       <div class="entry-top">
-        <span class="entry-name">${entry.employee}</span>
-        <span class="entry-date">${entry.date}</span>
+        <span class="entry-name">${escapeHtml(entry.employee)}</span>
+        <span class="entry-date">${escapeHtml(entry.date)}</span>
       </div>
-      <div class="entry-snippet">${entry.rawText}</div>
+      <div class="entry-snippet">${escapeHtml(entry.rawText)}</div>
       <div class="quick-question-label">Quick question</div>
       <div class="chat-question">${question}</div>
       <textarea class="followup-box" data-followup-for="${entry.id}" placeholder="Tap here, use your keyboard mic, and just say it"></textarea>
@@ -948,21 +1001,21 @@ function renderLists() {
     const flags = entry.flags || [];
     const flagsHtml = flags.length ? `
       <div class="flag-note">
-        ${flags.map(f => `⚠️ ${f}`).join("<br>")}
+        ${flags.map(f => `⚠️ ${escapeHtml(f)}`).join("<br>")}
       </div>
     ` : "";
     // Full field-by-field review so a misheard word is actually visible
     // before it goes out the door, not just a one-line snippet.
     const reviewHtml = REPORT_FIELDS.map(f => `
-      <div class="review-row"><strong>${f.label}:</strong> ${(entry.parsed && entry.parsed[f.key]) || "—"}</div>
+      <div class="review-row"><strong>${escapeHtml(f.label)}:</strong> ${escapeHtml(entry.parsed && entry.parsed[f.key]) || "—"}</div>
     `).join("");
 
     const wrap = document.createElement("div");
     wrap.className = "entry";
     wrap.innerHTML = `
       <div class="entry-top">
-        <span class="entry-name">${entry.employee}</span>
-        <span class="entry-date">${entry.date}</span>
+        <span class="entry-name">${escapeHtml(entry.employee)}</span>
+        <span class="entry-date">${escapeHtml(entry.date)}</span>
       </div>
       <div class="review-block">${reviewHtml}</div>
       ${flagsHtml}
