@@ -25,9 +25,33 @@ const TRADE_GLOSSARY = [
   "panel schedule", "amperage", "voltage drop",
 ];
 
+// Basic per-IP rate limit -- same idea as server.js. Best-effort only here:
+// serverless functions can cold-start on a fresh instance at any time,
+// which resets this in-memory state. Still meaningfully helps within a
+// single warm instance; a real distributed limit would need an external
+// store (e.g. Upstash/Redis) or the hosting platform's own rate limiting.
+const RATE_LIMIT_MAX = 30;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const _rateLimitState = new Map();
+function isRateLimited(ip) {
+  const now = Date.now();
+  const rec = _rateLimitState.get(ip);
+  if (!rec || now > rec.resetAt) {
+    _rateLimitState.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+  rec.count += 1;
+  return rec.count > RATE_LIMIT_MAX;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Use POST" });
+  }
+
+  const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
+  if (isRateLimited(ip)) {
+    return res.status(429).json({ error: "Too many requests -- try again in a minute." });
   }
 
   const { rawText, employee, date, fields, priorReports } = req.body || {};
