@@ -46,32 +46,7 @@ const TRADE_GLOSSARY = [
 app.use(express.json());
 app.use(express.static(__dirname));
 
-/* =================================================================
-   BASIC RATE LIMIT -- a PWA can't hold a real secret, so anyone who
-   discovers this URL could otherwise POST unlimited dictations, each
-   spending real Anthropic API tokens on this account's key. This caps
-   the damage per IP. Not a real auth system -- just a floor.
-   ================================================================= */
-const RATE_LIMIT_MAX = 30;           // requests
-const RATE_LIMIT_WINDOW_MS = 60_000; // per IP, per this window
-const _rateLimitState = new Map();
-function isRateLimited(ip) {
-  const now = Date.now();
-  const rec = _rateLimitState.get(ip);
-  if (!rec || now > rec.resetAt) {
-    _rateLimitState.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return false;
-  }
-  rec.count += 1;
-  return rec.count > RATE_LIMIT_MAX;
-}
-
 app.post("/api/parse", async (req, res) => {
-  const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "unknown";
-  if (isRateLimited(ip)) {
-    return res.status(429).json({ error: "Too many requests -- try again in a minute." });
-  }
-
   const { rawText, employee, date, fields, priorReports } = req.body || {};
 
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -223,8 +198,11 @@ Speech-to-text cleanup:
     }
 
     const text = (data.content || []).map((b) => b.text || "").join("");
+    console.log("RAW MODEL OUTPUT:", text);
     const cleaned = text.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON object found in model output");
+    const parsed = JSON.parse(jsonMatch[0]);
 
     return res.status(200).json({
       values: parsed.values || {},
